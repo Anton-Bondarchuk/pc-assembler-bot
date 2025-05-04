@@ -1,13 +1,14 @@
+import logging
+
 from aiogram import Router, types
 from aiogram.filters import Command, CommandStart
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.fsm.context import FSMContext
 
 from bot.state.pc_assember_fsm import PcAssemblerFSM
-from bot.yandex_market.api.service import PcAssemblerService
+from bot.service import PcAssemblerService
+from bot.keyboard import get_price_keyboard, get_goals_keyboard
 
 assemby_router = Router()
-
 
 @assemby_router.message(CommandStart())
 async def start_command(message: types.Message):
@@ -29,60 +30,13 @@ async def start_command(message: types.Message):
     )
 
 
-def get_price_keyboard():
-    """
-    Creates an inline keyboard with price options from $500 to $2500 with $500 step
-    """
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [
-            InlineKeyboardButton(text="$500", callback_data="price_500"),
-            InlineKeyboardButton(text="$1000", callback_data="price_1000"),
-        ],
-        [
-            InlineKeyboardButton(text="$1500", callback_data="price_1500"),
-            InlineKeyboardButton(text="$2000", callback_data="price_2000"),
-        ],
-        [
-            InlineKeyboardButton(text="$2500", callback_data="price_2500"),
-        ]
-    ])
-    return keyboard
-
-
-def get_goals_keyboard():
-    """
-    Creates an inline keyboard with PC usage goal options
-    """
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [
-            InlineKeyboardButton(text="🎮 Игры", callback_data="goal_games"),
-        ],
-        [
-            InlineKeyboardButton(text="📚 Офис и учеба", callback_data="goal_office"),
-        ],
-        [
-            InlineKeyboardButton(text="🎨 Работа с графикой и 3д", callback_data="goal_graphics"),
-        ],
-        [
-            InlineKeyboardButton(text="🎬 Видомонтаж и стримминг", callback_data="goal_video"),
-        ],
-        [
-            InlineKeyboardButton(text="💻 Программирование", callback_data="goal_programming"),
-        ],
-        [
-            InlineKeyboardButton(text="🔄 Универсальный пк", callback_data="goal_universal"),
-        ]
-    ])
-    return keyboard
-
-
 @assemby_router.message(Command("start_assembly"))
 async def start_assembly(message: types.Message, state: FSMContext):
     # Reset the state at the beginning of the assembly process
     await state.clear()
     # Set state to price selection
     await state.set_state(PcAssemblerFSM.price)
-    
+
     await message.answer(
         text="Выберите диапазон цен:",
         reply_markup=get_price_keyboard()
@@ -96,13 +50,13 @@ async def process_price_selection(callback_query: types.CallbackQuery, state: FS
     """
     # Extract the price from the callback data
     selected_price = callback_query.data.split('_')[1]
-    
+
     # Store the selected price in state
     await state.update_data(price=selected_price)
-    
+
     # Move to the next state - selecting goal
     await state.set_state(PcAssemblerFSM.goals)
-    
+
     await callback_query.answer(f"Вы выбрали ${selected_price}")
     await callback_query.message.edit_text(
         f"Бюджет: ${selected_price}.\n\nТеперь выберите назначение вашего ПК:",
@@ -110,78 +64,111 @@ async def process_price_selection(callback_query: types.CallbackQuery, state: FS
     )
 
 
-
 @assemby_router.callback_query(PcAssemblerFSM.goals, lambda c: c.data.startswith('goal_'))
 async def process_goal_selection(callback_query: types.CallbackQuery, state: FSMContext):
     """
-    Handler to process the selected goal
+    Handler to process the selected goal and generate PC configuration
     """
     # Extract the goal from the callback data
     goal_key = callback_query.data.split('_')[1]
-    
-    # Map goal keys to user-friendly names
-    goal_names = {
-        "games": "Игры",
-        "office": "Офис и учеба",
-        "graphics": "Работа с графикой и 3д",
-        "video": "Видомонтаж и стримминг",
-        "programming": "Программирование",
-        "universal": "Универсальный пк"
-    }
-    
-    selected_goal = goal_names.get(goal_key, goal_key)
-    
+
     # Store the selected goal in state
-    await state.update_data(goal=selected_goal)
-    
+    await state.update_data(goal=goal_key)
+
     # Get all the data stored in state
     data = await state.get_data()
-    
-    await callback_query.answer(f"Вы выбрали: {selected_goal}")
-    
-    # Show loading message
-    await callback_query.message.edit_text("⏳ Подбираем конфигурацию компьютера...")
-    
-    try:
-        pc_service = PcAssemblerService()
 
-        # Get PC build from service
-        pc_build = await pc_service.create_pc_build(int(data['price']), selected_goal)
-        
-        # Format the response message
-        components_text = ""
-        for component_type, component in pc_build["components"].items():
-            # Translate component type to Russian
-            component_types_ru = {
-                "cpu": "Процессор",
-                "gpu": "Видеокарта",
-                "ram": "Оперативная память",
-                "storage": "Накопитель",
-                "motherboard": "Материнская плата",
-                "power_supply": "Блок питания",
-                "case": "Корпус"
-            }
-            
-            component_name_ru = component_types_ru.get(component_type, component_type)
-            components_text += f"• {component_name_ru}: {component['name']} - {component['price']} ₽\n"
-        
-        result_message = (
-            f"🖥️ <b>Собранная конфигурация ПК</b>\n\n"
-            f"💰 Бюджет: ${data['price']}\n"
-            f"🎯 Назначение: {selected_goal}\n\n"
-            f"<b>Комплектующие:</b>\n"
-            f"{components_text}\n"
-            f"<b>Общая стоимость:</b> {pc_build['total_price_rub']} ₽ (${pc_build['total_price_usd']})"
-        )
-        
-        await callback_query.message.edit_text(
-            result_message,
-            parse_mode="HTML"
-        )
-        
+    # Show loading message
+    await callback_query.answer(f"Подбираем конфигурацию для: {goal_key}")
+    await callback_query.message.edit_text("⏳ Подбираем оптимальную конфигурацию компьютера...")
+
+    try:
+        # Get the user's budget
+        price_usd = float(data.get('price', '1000'))
+
+        # Create service instance and get PC build
+        pc_assembler = PcAssemblerService(
+            data_dir="./bot/pc-part-dataset/data/json/")
+        result = await pc_assembler.generate_pc_build(budget=price_usd, goal=goal_key)
+
+        if result['status'] == 'OPTIMAL':
+            # Format the message with the build details
+            message_text = f"🖥️ <b>Оптимальная конфигурация ({result['goal_ru']})</b>\n\n"
+
+            # Convert prices to RUB for display
+            exchange_rate = 75.0  # Update this to get current exchange rate
+            total_price_rub = pc_assembler.convert_usd_to_rub(
+                result['total_price'], exchange_rate)
+
+            # Add components to the message
+            for comp in result['components_with_details']:
+                price_rub = pc_assembler.convert_usd_to_rub(
+                    comp['price'], exchange_rate)
+                message_text += f"• <b>{comp['category_ru']}:</b> {comp['name']}\n"
+                message_text += f"  💰 {pc_assembler.format_price(comp['price'])} / {pc_assembler.format_price(price_rub, 'RUB')}\n"
+
+            message_text += f"\n<b>Общая стоимость:</b> {pc_assembler.format_price(result['total_price'])} / {pc_assembler.format_price(total_price_rub, 'RUB')}"
+            message_text += f"\n<b>Остаток бюджета:</b> {pc_assembler.format_price(result['remaining_budget'])}"
+
+            # Add buttons for actions
+            keyboard = types.InlineKeyboardMarkup(inline_keyboard=[
+                [types.InlineKeyboardButton(
+                    text="🔄 Подобрать другую конфигурацию", callback_data="restart")],
+                [types.InlineKeyboardButton(
+                    text="💾 Сохранить конфигурацию", callback_data="save_build")]
+            ])
+
+            await callback_query.message.edit_text(message_text, reply_markup=keyboard, parse_mode="HTML")
+
+            # Store the build in state for later use
+            await state.update_data(build_result=result)
+
+        elif result['status'] == 'INFEASIBLE':
+            # No solution found
+            await callback_query.message.edit_text(
+                "❌ Не удалось подобрать оптимальную конфигурацию с заданным бюджетом.\n"
+                "Попробуйте увеличить бюджет или выбрать другую цель.",
+                reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[
+                    [types.InlineKeyboardButton(
+                        text="🔄 Попробовать снова", callback_data="restart")]
+                ])
+            )
+        else:
+            # Error in optimization
+            await callback_query.message.edit_text(
+                f"❌ Ошибка при подборе конфигурации: {result['message']}\n"
+                "Пожалуйста, попробуйте снова или выберите другие параметры.",
+                reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[
+                    [types.InlineKeyboardButton(
+                        text="🔄 Попробовать снова", callback_data="restart")]
+                ])
+            )
     except Exception as e:
+        # Log the error
+        import traceback
+        logging.error(f"Error generating PC build: {e}")
+        logging.error(traceback.format_exc())
+
+        # Show error message to user
         await callback_query.message.edit_text(
-            f"❌ Произошла ошибка при подборе конфигурации: {str(e)}\n"
-            f"Пожалуйста, попробуйте еще раз или обратитесь в поддержку."
+            "❌ Произошла ошибка при подборе конфигурации.\n"
+            "Пожалуйста, попробуйте еще раз или обратитесь в поддержку.",
+            reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[
+                [types.InlineKeyboardButton(
+                    text="🔄 Попробовать снова", callback_data="restart")]
+            ])
         )
-    
+
+
+@assemby_router.callback_query(lambda c: c.data == "new_assembly")
+async def start_new_assembly(callback_query: types.CallbackQuery, state: FSMContext):
+    """
+    Handler to start a new assembly process
+    """
+    await callback_query.answer("Начинаем новую сборку!")
+    await state.set_state(PcAssemblerFSM.price)
+
+    await callback_query.message.edit_text(
+        text="Выберите диапазон цен:",
+        reply_markup=get_price_keyboard()
+    )

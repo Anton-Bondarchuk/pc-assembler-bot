@@ -13,6 +13,7 @@ from aiogram.client.bot import DefaultBotProperties
 from bot.config_data import config_dict
 from bot.commnands.set_commands import set_bot_commands
 from bot.handlers import assemby_router
+from bot.callback_router import callback_router
 
 class FSMMode(str, Enum): 
     MEMORY = "memory"
@@ -47,6 +48,7 @@ async def main():
     bot = Bot(config_dict["bot_token"], default=DefaultBotProperties(parse_mode="HTML"))
 
     dp.include_router(router=assemby_router)
+    dp.include_router(router=callback_router)
 
     await set_bot_commands(bot=bot)
 
